@@ -28,5 +28,6 @@ extern pthread_mutex_t pyrebox_mutex;
 
 void clear_targets(void);
 int pyrebox_init(const char *pyrebox_conf_str);
+void pyrebox_init_blocks(void);
 int pyrebox_finalize(void);
 #endif
