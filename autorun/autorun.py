@@ -287,7 +287,7 @@ def initialize_callbacks(module_hdl, printer):
             pyrebox_print("[-]    The configuration file does not contain the necessary keywords")
             return
     optional_kws = ["arg_list",]
-    for k in kws:
+    for k in optional_kws:
         if k in conf:
             pyrebox_print("[*]    The configuration file contains the optional keyword {}".format(k))
 
@@ -327,13 +327,15 @@ def initialize_callbacks(module_hdl, printer):
             else:
                 guest_agent.copy_file(temp_fname, conf["extract_path"] + "file.exe")
                 conf["main_executable_file"] = "file.exe"
-
+    execution_args = [conf["main_executable_file"]]
+    if "arg_list" in conf:
+        execution_args += conf["arg_list"]
     # Execute the file. We set a callback to signal this script that 
     # the files have already been copied and can be deleted
     f = functools.partial(files_copied_callback, temp_dnames)
     guest_agent.execute_file(conf["extract_path"] + conf["main_executable_file"],
                              callback = f,
-                             args=[conf["main_executable_file"]] + conf["arg_list"]
+                             args=execution_args
                              )
     # stop_agent() does not only kill the agent, but it also
     # disables the agent plugin. Invalid opcodes
