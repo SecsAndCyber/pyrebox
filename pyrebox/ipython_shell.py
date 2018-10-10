@@ -1818,7 +1818,7 @@ def initialize_shell():
             traceback.print_exc()
 
 
-def start_shell(cpu_index=0):
+def start_shell(cpu_index=0, local_ns=None, global_ns=None):
     global __shell
     global __local_ns
     global __cfg
@@ -1840,7 +1840,16 @@ def start_shell(cpu_index=0):
                 __local_ns["cpu"] = api.r_cpu(cpu_index)
                 if agent is not None:
                     __local_ns["agent"] = agent
-                __shell(local_ns=__local_ns)
+                if local_ns:
+                    __script_local_ns = local_ns.copy()
+                    __script_local_ns.update(__local_ns)
+                else:
+                    __script_local_ns = __local_ns.copy()
+                
+                if global_ns:
+                    __script_local_ns.update(global_ns)
+                    
+                __shell(local_ns=__script_local_ns)
             except Exception:
                 traceback.print_stack()
                 traceback.print_exc()
