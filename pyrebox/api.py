@@ -538,7 +538,7 @@ def get_module_list(pgd):
         :param pgd: The PGD of the process for which we want to extract the modules, or 0 to extract kernel modules
         :type pgd: int
 
-        :return: List of modules, each element is a dictionary with keys: "name", "base", "size", and "symbols_resolved"
+        :return: List of modules, each element is a dictionary with keys: "name", "fullname", base", "size", and "symbols_resolved"
         :rtype: list
     """
     import vmi
@@ -562,6 +562,7 @@ def get_module_list(pgd):
         if (proc_pid, proc_pgd) in vmi.modules:
             for mod in vmi.modules[(proc_pid, proc_pgd)].values():
                 mods.append({"name": mod.get_name(),
+                             "fullname": mod.get_fullname(),
                              "base": mod.get_base(),
                              "size": mod.get_size(),
                              "symbols_resolved" : mod.are_symbols_resolved()})
@@ -576,7 +577,7 @@ def get_symbol_list(pgd = None):
         :param pgd: The pgd to obtain the symbols from. 0 to get kernel symbols
         :type pgd: int
 
-        :return: List of symbols, each element is a dictionary with keys: "mod", "name", and "addr"
+        :return: List of symbols, each element is a dictionary with keys: "mod", "mod_fullname", "name", and "addr"
         :rtype: list
     """
     import vmi
@@ -585,7 +586,6 @@ def get_symbol_list(pgd = None):
     diff_modules = {}
     if pgd is None: 
         proc_list = get_process_list()
-        pp_print("[*] Updating symbol list... Be patient, this may take a while\n")
         for proc in proc_list:
             proc_pid = proc["pid"]
             proc_pgd = proc["pgd"]
@@ -593,44 +593,30 @@ def get_symbol_list(pgd = None):
                 vmi.update_modules(proc_pgd, update_symbols=True)
                 if (proc_pid, proc_pgd) in vmi.modules:
                     for module in vmi.modules[proc_pid, proc_pgd].values():
-                        c = module.get_checksum()
                         n = module.get_fullname()
-                        if (c, n) not in diff_modules:
-                            diff_modules[(c, n)] = [module]
-                        else:
-                            diff_modules[(c, n)].append(module)
+                        if n not in diff_modules:
+                            diff_modules[n] = module
         # Include kernel modules too
         vmi.update_modules(0, update_symbols=True)
         if (0, 0) in vmi.modules:
             for module in vmi.modules[0, 0].values():
-                c = module.get_checksum()
                 n = module.get_fullname()
-                if (c, n) not in diff_modules:
-                    diff_modules[(c, n)] = [module]
-                else:
-                    diff_modules[(c, n)].append(module)
+                if n not in diff_modules:
+                    diff_modules[n] = module
 
     else:
-        pp_print("[*] Updating symbol list for one process... Be patient, this may take a while\n")
         vmi.update_modules(pgd, update_symbols=True)
         for proc_pid, proc_pgd in vmi.modules:
             if proc_pgd == pgd:
                 for module in vmi.modules[proc_pid, proc_pgd].values():
-                    c = module.get_checksum()
                     n = module.get_fullname()
-                    if (c, n) not in diff_modules:
-                        diff_modules[(c, n)] = [module]
-                    else:
-                        diff_modules[(c, n)].append(module)
+                    if n not in diff_modules:
+                        diff_modules[n] = module
 
-    for mod_list in diff_modules.values():
-        added_names = []
-        for mod in mod_list:
-            syms = mod.get_symbols()
-            for name in syms:
-                if name not in added_names:
-                    res_syms.append({"mod": mod.get_name(), "name": name, "addr": syms[name]})
-                    added_names.append(name)
+    for mod in diff_modules.values():
+        syms = mod.get_symbols()
+        for name in syms:
+            res_syms.append({"mod": mod.get_name(), "mod_fullname": mod.get_fullname(), "name": name, "addr": syms[name]})
     return res_syms
 
 
@@ -1078,7 +1064,7 @@ class CallbackManager:
             #Fixup relative path
             add_trigger(self.callbacks[name], os.path.join(conf_m.pyre_root, trigger_path))
         else:
-            raise ValueError("Could not correctly compile trigger\n")
+            raise ValueError("Could not correctly compile trigger %s - cwd: %s\n" % (trigger_path, conf_m.pyre_root))
 
     def rm_trigger(self, name):
         ''' Remove the trigger from the callback specified as parameter
@@ -1207,7 +1193,10 @@ class BP:
     def __init__(self, addr, pgd, size=0, typ=0, func=None, new_style = False):
         """ Constructor for a BreakPoint
 
-            :param addr: The (start) address where we want to put the breakpoint
+            :param addr: The (start) address where we want to put the breakpoint. If a str is provided, it
+                         will search for a symbol and put the breakpoint there. The syntax is module!symbol,
+                         and it does not require to specify the full module or symbol name as long as there
+                         is no ambiguity.
             :type addr: int
 
             :param pgd: The PGD or address space where we want to put the breakpoint. Irrelevant for physical address
@@ -1249,8 +1238,44 @@ class BP:
             typ_str = "wp"
         self.__bp_repr = "BP%s_%d" % (typ_str, BP.__bp_num)
         BP.__bp_num += 1
-        self.addr = addr
         self.pgd = pgd
+        if isinstance(addr, int) or isinstance(addr, long):
+            self.addr = addr
+        elif isinstance(addr, str) or isinstance(addr, unicode):
+            # Try symbol resolution
+            self.addr = None
+            symbols = get_symbol_list(pgd)
+
+            if "!" in addr:
+                splitted = addr.split("!")
+                addr_mod = splitted[0]
+                addr_name = splitted[1]
+            else:
+                addr_mod = ""
+                addr_name = addr
+
+            candidates = []
+            for sym in symbols:
+                if addr_name.lower() == sym["name"].lower() and addr_mod.lower() == sym["mod"].lower():
+                    candidates.append(sym)
+
+            if len(candidates) == 0:
+                raise ValueError("No candidate symbols found")
+            if len(candidates) > 1:
+                raise ValueError("Found more than one candidate symbol, please be more specific")
+
+            mods = get_module_list(pgd)
+            
+            for mod in mods:
+                if candidates[0]["mod_fullname"] == mod["fullname"]:
+                    self.addr = mod["base"] + candidates[0]["addr"]
+                    break
+
+            if self.addr is None:
+                raise ValueError("Could not obtain absolute address for the symbol")
+        else:
+            raise ValueError("The addr parameter has an invalid type, must be int, str or unicode")
+
         self.en = False
         if (typ > self.EXECUTION) and size == 0:
             self.size = 1
@@ -1538,3 +1563,13 @@ class GuestFile:
             self.__offset += size
         return res
 
+
+def get_system_time():
+    '''
+        Retrieve the system time for the running guest.
+
+        :returns: The system time for the running system.
+        :rtype: datetime.datetime 
+    '''
+    from vmi import get_system_time
+    return get_system_time()
