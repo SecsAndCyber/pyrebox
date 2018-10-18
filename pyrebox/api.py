@@ -1063,7 +1063,7 @@ class CallbackManager:
         # Check if we have the plugin compiled for the correct architecture
         trigger_path = "%s-%s.so" % (trigger_path, conf_m.platform)
         p = subprocess.Popen(
-            ["make", trigger_path],
+            "make %s" % trigger_path,
             shell=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
